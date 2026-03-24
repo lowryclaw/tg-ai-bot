@@ -36,7 +36,8 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 必须：
 - 回答自然，不要像机器人
 - 每次回答开头必须标注角色，例如：[产品经理]
-"""}                {"role": "user", "content": user_msg}
+"""},               
+                {"role": "user", "content": user_msg}
             ]
         }
     )
