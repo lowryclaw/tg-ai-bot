@@ -8,7 +8,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 
-# ===== 通用搜索 =====
+# ===== 搜索工具 =====
 def web_search(query):
     try:
         res = requests.get(
@@ -21,27 +21,48 @@ def web_search(query):
         return "搜索失败"
 
 
-# ===== 通用价格查询（支持BTC/ETH等）=====
+# ===== 通用价格工具 =====
 def get_price(symbol):
     try:
+        symbol_map = {
+            "btc": "bitcoin",
+            "bitcoin": "bitcoin",
+            "eth": "ethereum",
+            "ethereum": "ethereum",
+            "bnb": "binancecoin",
+            "sol": "solana",
+            "doge": "dogecoin",
+            "xrp": "ripple"
+        }
+
+        coin_id = symbol_map.get(symbol.lower(), symbol.lower())
+
         res = requests.get(
             "https://api.coingecko.com/api/v3/simple/price",
             params={
-                "ids": symbol.lower(),
+                "ids": coin_id,
                 "vs_currencies": "usd"
             }
         )
+
         data = res.json()
-        return f"{symbol.upper()} 当前价格约为 {data[symbol.lower()]['usd']} USD"
-    except:
-        return "获取价格失败"
+
+        if coin_id not in data:
+            return f"暂不支持 {symbol} 的价格查询"
+
+        price = data[coin_id]["usd"]
+
+        return f"{symbol.upper()} 当前价格约为 {price} USD"
+
+    except Exception as e:
+        return f"获取价格失败：{str(e)}"
 
 
 # ===== 主逻辑 =====
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
 
-    # ===== 1️⃣ AI决策工具 =====
+    # ===== 1️⃣ AI决策（强化版）=====
     decision_res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -56,23 +77,34 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "content": """
 你是一个工具决策AI。
 
-你可以选择：
+你的任务：判断用户是否在询问“价格”。
 
-1. web_search → 查询信息
-2. get_price → 查询币价（BTC/ETH等）
-3. none → 不需要工具
+【必须用 get_price 的情况】
+- 出现：价格 / price / 多少钱
+- 或出现币种：btc / bitcoin / eth / ethereum / sol 等
 
-必须返回JSON，例如：
+例如：
+- btc价格
+- bitcoin
+- eth多少钱
 
-{"tool": "web_search", "query": "今天黄金价格"}
-
-或
-
+返回：
 {"tool": "get_price", "symbol": "BTC"}
 
-或
+---
 
+【使用 web_search】
+- 新闻 / 介绍 / 是什么
+
+返回：
+{"tool": "web_search", "query": "xxx"}
+
+---
+
+【否则】
 {"tool": "none"}
+
+⚠️ 只返回JSON
 """
                 },
                 {"role": "user", "content": user_msg}
@@ -92,16 +124,16 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tool_result = ""
 
     # ===== 2️⃣ 执行工具 =====
-    if tool == "web_search":
-        await update.message.reply_text("🔎 搜索中...")
-        tool_result = web_search(decision.get("query", user_msg))
-
-    elif tool == "get_price":
+    if tool == "get_price":
         await update.message.reply_text("📊 查询价格中...")
         symbol = decision.get("symbol", "BTC")
         tool_result = get_price(symbol)
 
-    # ===== 3️⃣ AI最终回答（多角色）=====
+    elif tool == "web_search":
+        await update.message.reply_text("🔎 搜索中...")
+        tool_result = web_search(decision.get("query", user_msg))
+
+    # ===== 3️⃣ 多角色AI =====
     final_res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -114,7 +146,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "role": "system",
                     "content": """
-你是一个AI团队（龙虾大脑），包含多个角色：
+你是一个AI团队（龙虾大脑），包含：
 
 1. 产品经理
 2. 设计师
@@ -126,15 +158,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - 用户说“设计：xxx” → 设计师
 - 用户说“测试：xxx” → 测试工程师
 - 用户说“开发：xxx” → 开发工程师
-- 如果没有指定 → 自动选择最合适角色
+- 未指定 → 自动选择
 
 工具规则：
-- 如果有工具结果，优先基于工具结果回答
-- 不要解释工具调用过程
+- 如果有工具结果，必须基于工具结果回答
+- 不要说“我调用了工具”
 
 必须：
-- 回答自然
-- 每次开头标注角色，例如：[开发工程师]
+- 开头标注角色，例如：[开发工程师]
+- 语言自然
 """
                 },
                 {
@@ -160,5 +192,5 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-print("🤖 龙虾大脑（通用Agent版）已启动...")
+print("🤖 龙虾大脑（最终稳定版）已启动...")
 app.run_polling()
