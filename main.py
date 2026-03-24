@@ -8,7 +8,44 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 
-# ===== 搜索工具 =====
+# ===== 工具函数 =====
+
+def get_price(symbol):
+    symbol_map = {
+        "btc": "bitcoin",
+        "bitcoin": "bitcoin",
+        "eth": "ethereum",
+        "ethereum": "ethereum",
+        "bnb": "binancecoin",
+        "sol": "solana"
+    }
+
+    coin_id = symbol_map.get(symbol.lower(), symbol.lower())
+
+    try:
+        res = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd"}
+        )
+        data = res.json()
+
+        if coin_id not in data:
+            return f"不支持 {symbol}"
+
+        return f"{symbol.upper()} 当前价格约为 {data[coin_id]['usd']} USD"
+
+    except:
+        return "价格获取失败"
+
+
+def get_weather(city):
+    try:
+        res = requests.get(f"https://wttr.in/{city}?format=3")
+        return res.text
+    except:
+        return "天气获取失败"
+
+
 def web_search(query):
     try:
         res = requests.get(
@@ -16,53 +53,24 @@ def web_search(query):
             params={"q": query, "format": "json"}
         )
         data = res.json()
-        return data.get("AbstractText", "")[:500]
+        return data.get("AbstractText", "")[:300]
     except:
         return "搜索失败"
 
 
-# ===== 通用价格工具 =====
-def get_price(symbol):
-    try:
-        symbol_map = {
-            "btc": "bitcoin",
-            "bitcoin": "bitcoin",
-            "eth": "ethereum",
-            "ethereum": "ethereum",
-            "bnb": "binancecoin",
-            "sol": "solana",
-            "doge": "dogecoin",
-            "xrp": "ripple"
-        }
-
-        coin_id = symbol_map.get(symbol.lower(), symbol.lower())
-
-        res = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price",
-            params={
-                "ids": coin_id,
-                "vs_currencies": "usd"
-            }
-        )
-
-        data = res.json()
-
-        if coin_id not in data:
-            return f"暂不支持 {symbol} 的价格查询"
-
-        price = data[coin_id]["usd"]
-
-        return f"{symbol.upper()} 当前价格约为 {price} USD"
-
-    except Exception as e:
-        return f"获取价格失败：{str(e)}"
+# ===== 工具注册表（核心）=====
+TOOLS = {
+    "get_price": get_price,
+    "get_weather": get_weather,
+    "web_search": web_search
+}
 
 
-# ===== 主逻辑 =====
+# ===== Agent核心 =====
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
 
-    # ===== 1️⃣ AI决策（强化版）=====
+    # ===== 1️⃣ AI决定要不要调用工具 =====
     decision_res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -75,36 +83,26 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "role": "system",
                     "content": """
-你是一个工具决策AI。
+你是一个AI Agent。
 
-你的任务：判断用户是否在询问“价格”。
+你可以调用以下工具：
 
-【必须用 get_price 的情况】
-- 出现：价格 / price / 多少钱
-- 或出现币种：btc / bitcoin / eth / ethereum / sol 等
+1. get_price(symbol)
+2. get_weather(city)
+3. web_search(query)
 
-例如：
-- btc价格
-- bitcoin
-- eth多少钱
+当需要工具时，返回JSON：
 
-返回：
-{"tool": "get_price", "symbol": "BTC"}
+{
+  "tool": "get_price",
+  "arguments": {"symbol": "BTC"}
+}
 
----
+否则返回：
 
-【使用 web_search】
-- 新闻 / 介绍 / 是什么
-
-返回：
-{"tool": "web_search", "query": "xxx"}
-
----
-
-【否则】
 {"tool": "none"}
 
-⚠️ 只返回JSON
+⚠️ 只返回JSON，不要解释
 """
                 },
                 {"role": "user", "content": user_msg}
@@ -114,26 +112,26 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     decision_text = decision_res.json()["choices"][0]["message"]["content"]
 
+    # ===== 解析 =====
     try:
         decision = json.loads(decision_text)
-        tool = decision.get("tool", "none")
     except:
-        tool = "none"
-        decision = {}
+        decision = {"tool": "none"}
+
+    tool = decision.get("tool")
+    args = decision.get("arguments", {})
 
     tool_result = ""
 
-    # ===== 2️⃣ 执行工具 =====
-    if tool == "get_price":
-        await update.message.reply_text("📊 查询价格中...")
-        symbol = decision.get("symbol", "BTC")
-        tool_result = get_price(symbol)
+    # ===== 2️⃣ 通用执行（关键！）=====
+    if tool in TOOLS:
+        await update.message.reply_text("⚙️ 正在处理...")
+        try:
+            tool_result = TOOLS[tool](**args)
+        except Exception as e:
+            tool_result = f"工具执行失败: {str(e)}"
 
-    elif tool == "web_search":
-        await update.message.reply_text("🔎 搜索中...")
-        tool_result = web_search(decision.get("query", user_msg))
-
-    # ===== 3️⃣ 多角色AI =====
+    # ===== 3️⃣ 多角色回答 =====
     final_res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -146,27 +144,22 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "role": "system",
                     "content": """
-你是一个AI团队（龙虾大脑），包含：
+你是AI团队（龙虾大脑）：
 
-1. 产品经理
-2. 设计师
-3. 测试工程师
-4. 开发工程师
+角色：
+- 产品经理
+- 设计师
+- 测试工程师
+- 开发工程师
 
 规则：
-- 用户说“产品：xxx” → 产品经理
-- 用户说“设计：xxx” → 设计师
-- 用户说“测试：xxx” → 测试工程师
-- 用户说“开发：xxx” → 开发工程师
-- 未指定 → 自动选择
+- 自动选择角色
+- 回答自然
+- 开头标注：[角色]
 
 工具规则：
-- 如果有工具结果，必须基于工具结果回答
-- 不要说“我调用了工具”
-
-必须：
-- 开头标注角色，例如：[开发工程师]
-- 语言自然
+- 如果有工具结果，必须用它
+- 不要解释工具
 """
                 },
                 {
@@ -192,5 +185,5 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-print("🤖 龙虾大脑（最终稳定版）已启动...")
+print("🚀 Agent（函数调用版）已启动")
 app.run_polling()
