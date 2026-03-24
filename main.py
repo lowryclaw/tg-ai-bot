@@ -3,12 +3,11 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# ===== 环境变量 =====
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 
-# ===== 搜索函数（联网能力）=====
+# ===== 搜索函数 =====
 def search(query):
     try:
         res = requests.get(
@@ -53,24 +52,29 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         json={
             "model": "gpt-4.1-mini",
             "messages": [
-                {"role": "system", "content": "判断用户问题是否需要联网获取最新信息，只回答 YES 或 NO"},
+                {
+                    "role": "system",
+                    "content": "判断用户问题是否需要联网获取最新信息（如价格、天气、新闻等），只回答 YES 或 NO"
+                },
                 {"role": "user", "content": user_msg}
             ]
         }
     )
 
     decision = judge.json()["choices"][0]["message"]["content"].strip()
+    need_search = "YES" in decision.upper()
 
     # ===== 2. 是否联网 =====
-    if "YES" in decision:
+    if need_search:
         await update.message.reply_text("🔎 我查一下...")
 
         search_result = search(user_msg)
 
         final_prompt = f"""
-你是一个智能助手，请基于以下搜索结果回答用户问题，用自然语言总结：
+请直接回答用户问题，不要讨论方案，不要反问，不要角色扮演。
 
-搜索结果：
+基于以下信息给出简洁、明确的答案：
+
 {search_result}
 
 用户问题：
@@ -79,7 +83,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         final_prompt = user_msg
 
-    # ===== 3. 多角色AI回答 =====
+    # ===== 3. AI回答 =====
     res = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -92,23 +96,26 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 {
                     "role": "system",
                     "content": """
+优先规则：
+- 如果是查询事实（价格、天气、新闻等），直接回答，不进入角色扮演
+
 你是一个AI团队（龙虾大脑），拥有多个角色：
 
-1. 产品经理：负责需求分析、功能设计
-2. 设计师：负责UI/UX建议
-3. 测试工程师：负责找bug、提测试点
-4. 开发工程师：负责写代码、技术实现
+1. 产品经理
+2. 设计师
+3. 测试工程师
+4. 开发工程师
 
 规则：
-- 用户说“产品：xxx” → 用产品经理回答
-- 用户说“设计：xxx” → 用设计师回答
-- 用户说“测试：xxx” → 用测试回答
-- 用户说“开发：xxx” → 用开发回答
-- 如果没指定 → 自动选择角色
+- 用户说“产品：xxx” → 产品经理
+- 用户说“设计：xxx” → 设计师
+- 用户说“测试：xxx” → 测试工程师
+- 用户说“开发：xxx” → 开发工程师
+- 如果没有指定 → 自动选择最合适角色
 
-必须：
+要求：
 - 回答自然，不像机器人
-- 每次开头必须标注角色，例如：[产品经理]
+- 非查询类问题才使用角色
 """
                 },
                 {"role": "user", "content": final_prompt}
@@ -121,9 +128,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 
-# ===== 启动Bot =====
+# ===== 启动 =====
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-print("🤖 龙虾大脑已启动...")
+print("🤖 龙虾大脑 v2 已启动...")
 app.run_polling()
