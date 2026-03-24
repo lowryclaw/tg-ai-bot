@@ -16,9 +16,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Content-Type": "application/json"
         },
         json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-4.1-mini",
             "messages": [
-                {"role": "system", "content": "你是一个聪明、自然聊天的AI助手"},
+                {"role": "system", "content": "你是一个自然聊天、不死板的AI助手"},
                 {"role": "user", "content": user_msg}
             ]
         }
